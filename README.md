@@ -1,42 +1,46 @@
 Meta Ad Library Scraper
 Overview
-This Python script scrapes advertisements from the Meta Ad Library based on a specified keyword and country code. It extracts ad details such as the advertiser, ad text, ad link, active time, and media (images and videos), ranks the top 5 ads by their active duration, and saves the results to a CSV file. Additionally, it downloads media files for the top 5 ads to a designated folder.
+This Python script scrapes advertisements from the Meta Ad Library using a specified keyword and country code. It extracts ad details such as the advertiser, ad text, ad link, active time, and media (images and videos), ranks the top 5 ads by their active duration, and saves the results to a CSV file. Additionally, it downloads media files for the top 5 ads to a designated folder.
+
 Features
 
-Scrapes ads from the Meta Ad Library using a keyword and country code.
-Extracts ad details: advertiser, ad text, ad link, page ID, active time, days active, and ad variations.
-Downloads images and videos for the top 5 ads based on active duration.
-Saves ad metadata to a CSV file (meta_ads_ranked.csv).
-Saves media files to the ad_media folder with proper file extensions based on content type.
-Handles cookie popups and scrolling to load more ads.
-Includes error handling for robust scraping.
+Scrapes Ads: Fetches ads from the Meta Ad Library based on a keyword and country code.
+Extracts Details: Collects ad metadata including advertiser, ad text, ad link, page ID, active time, days active, and ad variations.
+Downloads Media: Saves images and videos for the top 5 ads, ranked by active duration.
+Saves to CSV: Exports ad metadata to meta_ads_ranked.csv.
+Organizes Media: Stores media files in the ad_media folder with proper extensions based on content type.
+Handles Interactions: Manages cookie popups and scrolls to load more ads.
+Robust Error Handling: Includes error handling for reliable scraping.
+
 
 Requirements
 
-Python 3.6+
-Dependencies (install via pip):pip install undetected-chromedriver requests
+Python: Version 3.6 or higher.
+Dependencies:Install the required packages using pip:pip install undetected-chromedriver requests
 
 
-Chrome Browser: Ensure Chrome is installed, as undetected_chromedriver requires it. The script uses Chrome version 136 (specified via version_main=136).
-Internet Connection: Required to access the Meta Ad Library and download media.
+Chrome Browser: Ensure Chrome is installed, as undetected_chromedriver requires it. The script targets Chrome version 136 (specified via version_main=136).
+Internet Connection: Needed to access the Meta Ad Library and download media.
+
 
 Setup
 
 Clone or Download the Script:
 
-Save the script as meta_ad_scraper.py (or any preferred name).
+Save the script as meta_ad_scraper.py (or your preferred name).
 
 
 Install Dependencies:
 
-Run the following command to install required packages:pip install undetected-chromedriver requests
+Run the following command to install the required packages:pip install undetected-chromedriver requests
 
 
 
 
 Verify Chrome Installation:
 
-Ensure Chrome is installed and compatible with version 136. If Chrome updates break compatibility, you may need to adjust the version_main parameter in init_driver().
+Ensure Chrome is installed and compatible with version 136. If Chrome updates cause compatibility issues, adjust the version_main parameter in the init_driver() function.
+
 
 
 
@@ -44,7 +48,7 @@ Usage
 
 Configure Settings:
 
-Open the script and modify the following variables in the SETTINGS section as needed:KEYWORD = "Spain Incorporation"  # Keyword to search for ads
+Open the script and modify the SETTINGS section as needed:KEYWORD = "Spain Incorporation"  # Keyword to search for ads
 COUNTRY_CODE = "India"          # Country code for ad search (e.g., "US", "India")
 NUM_SCROLLS = 3                 # Number of scrolls to load more ads
 OUTPUT_FILE = "meta_ads_ranked.csv"  # Output CSV file for ad metadata
@@ -72,11 +76,11 @@ Paths of saved media files.
 
 
 
+
 Output
-
-CSV File:
-
+CSV File
 Ad metadata is saved to meta_ads_ranked.csv with the following columns:
+
 Advertiser: Name of the advertiser.
 Ad Text: Text content of the ad.
 Ad Link: URL of the ad.
@@ -85,24 +89,17 @@ Active Time: Ad's active duration (e.g., "Started running on 1 Jan 2025").
 Days Active: Calculated days the ad has been active.
 Ad Variations: Number of variations of the ad (proxy for testing/optimization).
 
-
-
-
-Media Files:
+Media Files
 
 Images and videos for the top 5 ads are saved to the ad_media folder.
 Filenames follow the format: ad_{rank}_{advertiser}_{media_type}_{index}.{ext}
-Example: ad_1_Unknown Advertiser_image_1.jpg
+Example: ad_1_Unknown_Advertiser_image_1.jpg
 
 
 Extensions are determined dynamically based on the Content-Type header (e.g., .jpg, .png, .mp4).
 
-
-Debugging:
-
+Debugging
 The script saves the page source to page_source.html for debugging purposes.
-
-
 
 Example Output
 🔍 Searching for ads with keyword: Spain Incorporation
@@ -132,40 +129,35 @@ Example Output
    Ad Variations: 2
    Images: 2 found
    Videos: 0 found
-📥 Saved media: ad_media/ad_1_Unknown Advertiser_image_1.jpg (Content-Type: image/jpeg)
-📥 Saved media: ad_media/ad_1_Unknown Advertiser_image_2.png (Content-Type: image/png)
+📥 Saved media: ad_media/ad_1_Unknown_Advertiser_image_1.jpg (Content-Type: image/jpeg)
+📥 Saved media: ad_media/ad_1_Unknown_Advertiser_image_2.png (Content-Type: image/png)
 ...
 
-Troubleshooting
 
-No Ads Found:
+Troubleshooting
+No Ads Found
 
 Ensure the KEYWORD and COUNTRY_CODE are valid and yield results in the Meta Ad Library.
 Check page_source.html to verify if ads are present on the page.
 Increase NUM_SCROLLS to load more ads.
 
-
-Media Not Downloading:
+Media Not Downloading
 
 Verify the URLs extracted for images and videos are valid (check page_source.html).
 Meta might block automated downloads; consider adding delays or rotating user agents.
-If files are too small (e.g., 1 KB), they might be thumbnails. Adjust the XPath in scrape_ads to target full-size media.
+If files are too small (e.g., 1 KB), they might be thumbnails. Adjust the XPath in scrape_ads() to target full-size media.
 
-
-Chrome Version Mismatch:
+Chrome Version Mismatch
 
 If undetected_chromedriver fails, ensure your Chrome version is compatible with version_main=136. Update the version_main parameter if needed.
 
-
-CAPTCHAs:
+CAPTCHAs
 
 Meta may detect automation and show CAPTCHAs. undetected_chromedriver helps, but you might need to handle CAPTCHAs manually or use a CAPTCHA-solving service.
 
+File Extension Issues
 
-File Extension Issues:
-
-The script determines extensions based on the Content-Type header. If the extension is incorrect, check the logged Content-Type and adjust get_extension_from_content_type if needed.
-
+The script determines extensions based on the Content-Type header. If the extension is incorrect, check the logged Content-Type and adjust get_extension_from_content_type() if needed.
 
 
 Limitations
@@ -176,3 +168,6 @@ Rate Limits: Meta may impose rate limits or block automated requests, especially
 Media Quality: The script might download thumbnails instead of full-size images. You may need to refine the XPath selectors to target higher-quality media.
 
 
+License
+Owned by Growcliq and Ondemand International
+#gang gang
