@@ -11,9 +11,9 @@ import re
 from collections import Counter
 
 # SETTINGS
-KEYWORD = "Apple" #add anything you want
-COUNTRY_CODE = "India" #add anything you want
-NUM_SCROLLS = 3 #add anything you want
+KEYWORD = "Spain Incorporation"
+COUNTRY_CODE = "India"
+NUM_SCROLLS = 3
 OUTPUT_FILE = "meta_ads_ranked.csv"
 MEDIA_FOLDER = "ad_media"
 
@@ -72,29 +72,53 @@ def extract_page_id(ad_link):
         return match.group(1)
     return "N/A"
 
-def download_media(url, folder, filename):
-    """Download media (image or video) from URL and save to folder."""
+def get_extension_from_content_type(content_type):
+    """Determine file extension based on Content-Type header."""
+    mime_to_ext = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/gif": "gif",
+        "video/mp4": "mp4",
+        "video/webm": "webm",
+        "video/ogg": "ogv"
+    }
+    content_type = content_type.lower()
+    for mime, ext in mime_to_ext.items():
+        if mime in content_type:
+            return ext
+    print(f"⚠️ Unknown Content-Type '{content_type}'. Defaulting to 'bin'.")
+    return "bin"  # Default extension for unknown types
+
+def download_media(url, folder, filename_base, media_type="image"):
+    """Download media (image or video) from URL and save to folder with correct extension."""
     try:
         # Create media folder if it doesn't exist
         if not os.path.exists(folder):
             os.makedirs(folder)
 
-        # Clean filename to avoid invalid characters
-        filename = "".join(c for c in filename if c.isalnum() or c in (' ', '_', '-')).strip()
-        filepath = os.path.join(folder, filename)
-
-        # Download the media
+        # Download the media and get the Content-Type
         response = requests.get(url, stream=True, timeout=10)
-        if response.status_code == 200:
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-            print(f"📥 Saved media: {filepath}")
-            return True
-        else:
+        if response.status_code != 200:
             print(f"⚠️ Failed to download media from {url}: Status code {response.status_code}")
             return False
+
+        # Determine the correct extension based on Content-Type
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        ext = get_extension_from_content_type(content_type)
+
+        # Sanitize the filename base (without extension)
+        filename_base = "".join(c for c in filename_base if c.isalnum() or c in (' ', '_', '-')).strip()
+        filename = f"{filename_base}.{ext}"
+        filepath = os.path.join(folder, filename)
+
+        # Save the file
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        print(f"📥 Saved media: {filepath} (Content-Type: {content_type})")
+        return True
+
     except Exception as e:
         print(f"⚠️ Error downloading media from {url}: {e}")
         return False
@@ -215,7 +239,7 @@ def scrape_ads(keyword, country="US"):
             print(f"   Text: {ad_text[:50]}...")
             print(f"   Link: {ad_link}")
             print(f"   Page ID: {page_id}")
-            print(f"   Active Time: {ad_data['Active Time']} ({days_active:.2f} days)")
+            print(f"   Active Time: {ad_data['Active Time']} ({चेdays_active:.2f} days)")
             print(f"   Ad Variations: {variations} (proxy for testing/optimization)")
             print(f"   Images: {len(ad_data['Image URLs'])} found")
             print(f"   Videos: {len(ad_data['Video URLs'])} found")
@@ -283,13 +307,13 @@ def show_top_5_ads(ads):
 
         # Download images
         for j, img_url in enumerate(ad["Image URLs"], 1):
-            filename = f"ad_{i}_{ad['Advertiser']}_image_{j}.jpg"
-            download_media(img_url, MEDIA_FOLDER, filename)
+            filename_base = f"ad_{i}_{ad['Advertiser']}_image_{j}"
+            download_media(img_url, MEDIA_FOLDER, filename_base, media_type="image")
 
         # Download videos
         for j, vid_url in enumerate(ad["Video URLs"], 1):
-            filename = f"ad_{i}_{ad['Advertiser']}_video_{j}.mp4"
-            download_media(vid_url, MEDIA_FOLDER, filename)
+            filename_base = f"ad_{i}_{ad['Advertiser']}_video_{j}"
+            download_media(vid_url, MEDIA_FOLDER, filename_base, media_type="video")
 
 if __name__ == "__main__":
     ad_data = scrape_ads(KEYWORD, COUNTRY_CODE)
