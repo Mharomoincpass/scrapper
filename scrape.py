@@ -11,9 +11,9 @@ import re
 from collections import Counter
 
 # SETTINGS
-KEYWORD = "Apple"
-COUNTRY_CODE = "India"
-NUM_SCROLLS = 3
+KEYWORD = "Apple" #add anything you want
+COUNTRY_CODE = "India" #add anything you want
+NUM_SCROLLS = 3 #add anything you want
 OUTPUT_FILE = "meta_ads_ranked.csv"
 MEDIA_FOLDER = "ad_media"
 
