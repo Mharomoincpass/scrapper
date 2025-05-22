@@ -1,5 +1,7 @@
 import time
 import csv
+import os
+import requests
 from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -9,10 +11,11 @@ import re
 from collections import Counter
 
 # SETTINGS
-KEYWORD = "seo"
-COUNTRY_CODE = "india"
+KEYWORD = "Apple"
+COUNTRY_CODE = "India"
 NUM_SCROLLS = 3
 OUTPUT_FILE = "meta_ads_ranked.csv"
+MEDIA_FOLDER = "ad_media"
 
 def init_driver():
     options = uc.ChromeOptions()
@@ -68,6 +71,33 @@ def extract_page_id(ad_link):
     if match:
         return match.group(1)
     return "N/A"
+
+def download_media(url, folder, filename):
+    """Download media (image or video) from URL and save to folder."""
+    try:
+        # Create media folder if it doesn't exist
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        # Clean filename to avoid invalid characters
+        filename = "".join(c for c in filename if c.isalnum() or c in (' ', '_', '-')).strip()
+        filepath = os.path.join(folder, filename)
+
+        # Download the media
+        response = requests.get(url, stream=True, timeout=10)
+        if response.status_code == 200:
+            with open(filepath, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            print(f"📥 Saved media: {filepath}")
+            return True
+        else:
+            print(f"⚠️ Failed to download media from {url}: Status code {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"⚠️ Error downloading media from {url}: {e}")
+        return False
 
 def scrape_ads(keyword, country="US"):
     driver = init_driver()
@@ -132,11 +162,21 @@ def scrape_ads(keyword, country="US"):
             active_time_elem = ad.find_elements(By.XPATH, './/span[contains(text(), "Started running on") or contains(text(), " - ")]')
             active_time = active_time_elem[0].text if active_time_elem else "Unknown"
 
+            # Extract image URLs
+            image_elems = ad.find_elements(By.XPATH, './/img[@src]')
+            image_urls = [img.get_attribute('src') for img in image_elems if img.get_attribute('src') and not img.get_attribute('src').endswith('.gif')]
+
+            # Extract video URLs (if any)
+            video_elems = ad.find_elements(By.XPATH, './/video[@src]')
+            video_urls = [vid.get_attribute('src') for vid in video_elems if vid.get_attribute('src')]
+
             raw_ads.append({
                 "Advertiser": advertiser,
                 "Ad Text": ad_text,
                 "Ad Link": ad_link,
-                "Active Time": active_time
+                "Active Time": active_time,
+                "Image URLs": image_urls,
+                "Video URLs": video_urls
             })
         except Exception as e:
             print(f"⚠️ Error collecting raw ad data: {e}")
@@ -167,7 +207,9 @@ def scrape_ads(keyword, country="US"):
                 "Page ID": page_id,
                 "Active Time": ad_data["Active Time"],
                 "Days Active": days_active,
-                "Ad Variations": variations
+                "Ad Variations": variations,
+                "Image URLs": ad_data["Image URLs"],
+                "Video URLs": ad_data["Video URLs"]
             })
             print(f"✔️ Parsed ad #{index}: {ad_data['Advertiser']}")
             print(f"   Text: {ad_text[:50]}...")
@@ -175,6 +217,8 @@ def scrape_ads(keyword, country="US"):
             print(f"   Page ID: {page_id}")
             print(f"   Active Time: {ad_data['Active Time']} ({days_active:.2f} days)")
             print(f"   Ad Variations: {variations} (proxy for testing/optimization)")
+            print(f"   Images: {len(ad_data['Image URLs'])} found")
+            print(f"   Videos: {len(ad_data['Video URLs'])} found")
             print("⚠️ Note: Direct ad engagement metrics are not available via Meta APIs due to privacy restrictions.")
             print("ℹ️ Use 'Days Active' as primary metric for ad performance.")
         except Exception as e:
@@ -193,10 +237,13 @@ def save_to_csv(data, filename):
         print("⚠️ No data to save.")
         return
 
+    # Remove Image URLs and Video URLs from CSV to avoid clutter
+    csv_data = [{k: v for k, v in ad.items() if k not in ["Image URLs", "Video URLs"]} for ad in data]
+
     with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=data[0].keys())
+        writer = csv.DictWriter(f, fieldnames=csv_data[0].keys())
         writer.writeheader()
-        writer.writerows(data)
+        writer.writerows(csv_data)
 
     print(f"📁 Saved {len(data)} ads to {filename}")
 
@@ -230,7 +277,19 @@ def show_top_5_ads(ads):
         print(f"   Page ID: {ad['Page ID']}")
         print(f"   Active Time: {ad['Active Time']} ({ad['Days Active']:.2f} days active)")
         print(f"   Ad Variations: {ad['Ad Variations']} (proxy for testing/optimization)")
+        print(f"   Images: {len(ad['Image URLs'])} found")
+        print(f"   Videos: {len(ad['Video URLs'])} found")
         print("⚠️ Note: Direct ad engagement metrics are not available; using 'Days Active' as primary metric.\n")
+
+        # Download images
+        for j, img_url in enumerate(ad["Image URLs"], 1):
+            filename = f"ad_{i}_{ad['Advertiser']}_image_{j}.jpg"
+            download_media(img_url, MEDIA_FOLDER, filename)
+
+        # Download videos
+        for j, vid_url in enumerate(ad["Video URLs"], 1):
+            filename = f"ad_{i}_{ad['Advertiser']}_video_{j}.mp4"
+            download_media(vid_url, MEDIA_FOLDER, filename)
 
 if __name__ == "__main__":
     ad_data = scrape_ads(KEYWORD, COUNTRY_CODE)
