@@ -2,11 +2,7 @@ import csv
 import os
 import tempfile
 import shutil
-import pandas as pd
-import numpy as np
 from transformers import pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LinearRegression
 from deep_translator import GoogleTranslator
 from langdetect import detect
 
@@ -25,6 +21,7 @@ BENCHMARKS = {
     "Software Training": {"CPC": 60.00, "CTR": 0.0090, "ConvRate": 0.035, "AOV": 15000.00},
     "Web Hosting & Domains": {"CPC": 80.00, "CTR": 0.0080, "ConvRate": 0.030, "AOV": 12000.00},
     "Freelance Software Development": {"CPC": 100.00, "CTR": 0.0085, "ConvRate": 0.032, "AOV": 36000.00},
+    "Business Consulting & Services": {"CPC": 150.00, "CTR": 0.0090, "ConvRate": 0.025, "AOV": 300000.00},
     "Software Development": {"CPC": 80.00, "CTR": 0.009, "ConvRate": 0.035, "AOV": 30000.00}
 }
 
@@ -53,7 +50,7 @@ def preprocess_text(text, advertiser=""):
     if cache_key in translation_cache:
         return translation_cache[cache_key]
     if not text or text.strip() == "..." or len(text.strip()) < 10:
-        result = f"Software development ad by {advertiser}" if advertiser and advertiser != "Unknown Advertiser" else "Generic software development ad"
+        result = f"Business consulting ad by {advertiser}" if advertiser and advertiser != "Unknown Advertiser" else "Generic business consulting ad"
     else:
         try:
             lang = detect(text)
@@ -77,41 +74,14 @@ def predict_industry(ad_texts, advertisers):
         results = classifier(ad_texts, candidate_labels=INDUSTRIES, multi_label=False)
         if isinstance(results, dict):
             results = [results]
-        return [{"Industry": result["labels"][0], 
-                 "Confidence": result["scores"][0],
-                 "Note": f"Low confidence ({result['scores'][0]:.2f}) - Manual review needed" if result["scores"][0] < CONFIDENCE_THRESHOLD else ""} 
-                for result in results]
+        return [{
+            "Industry": result["labels"][0], 
+            "Confidence": result["scores"][0],
+            "Note": f"Low confidence ({result['scores'][0]:.2f}) - Manual review needed" if result["scores"][0] < CONFIDENCE_THRESHOLD else ""
+        } for result in results]
     except Exception as e:
         print(f"⚠️ Error classifying ad texts: {e}")
         return [{"Industry": "Software Development", "Confidence": 0.0, "Note": "Manual review needed - Classification error"}] * len(ad_texts)
-
-def train_and_predict(ads, labeled_data_file="labeled_data.csv"):
-    """Train a model to predict impressions if labeled data is available."""
-    if os.path.exists(labeled_data_file):
-        try:
-            labeled_df = pd.read_csv(labeled_data_file)
-            if labeled_df.empty:
-                print("⚠️ Labeled data file is empty. Falling back to rule-based estimation.")
-                return None
-            vectorizer = TfidfVectorizer(max_features=100)
-            text_features_train = vectorizer.fit_transform(labeled_df['Ad Text']).toarray()
-            X_train = pd.concat([labeled_df[['Days Active', 'Ad Variations']], 
-                               pd.DataFrame(text_features_train)], axis=1)
-            y_train = labeled_df['Impressions']
-            model = LinearRegression()
-            model.fit(X_train, y_train)
-            scraped_df = pd.DataFrame(ads)
-            text_features_test = vectorizer.transform(scraped_df['Ad Text']).toarray()
-            X_test = pd.concat([scraped_df[['Days Active', 'Ad Variations']], 
-                              pd.DataFrame(text_features_test)], axis=1)
-            predicted_impressions = model.predict(X_test)
-            return predicted_impressions
-        except Exception as e:
-            print(f"⚠️ Error training model: {e}. Falling back to rule-based estimation.")
-            return None
-    else:
-        print("ℹ️ No labeled data found. Using rule-based estimation.")
-        return None
 
 def estimate_metrics(ads):
     """Estimate performance metrics for each ad based on industry benchmarks."""
@@ -119,17 +89,30 @@ def estimate_metrics(ads):
         print("⚠️ No ads to estimate metrics for.")
         return []
     print(f"ℹ️ Estimating metrics for {len(ads)} unique ads")
-    predicted_impressions = train_and_predict(ads)
     results = []
     low_confidence_ads = []
+    seen_ads = set()
     
-    ad_texts = [ad["Ad Text"] for ad in ads]
-    advertisers = [ad["Advertiser"] for ad in ads]
+    ad_texts = [ad.get("Ad Text", "Business consulting ad by {ad['Advertiser']}") for ad in ads]
+    advertisers = [ad.get("Advertiser", "Unknown Advertiser") for ad in ads]
     industry_infos = predict_industry(ad_texts, advertisers)
     
+    if len(industry_infos) != len(ads):
+        print(f"⚠️ Mismatch in industry_infos ({len(industryInfos)}) and ads ({len(ads)}). Using default industry.")
+        industry_infos = [{"Industry": "Software Development", "Confidence": 0.0, "Note": "Manual review needed - Classification error"}] * len(ads)
+    
     for i, ad in enumerate(ads):
-        if ad["Ad Text"] == "..." or ad["Advertiser"] == "Unknown Advertiser":
-            continue  # Skip invalid ads
+        print(f"Processing ad {i+1}: Advertiser={ad.get('Advertiser', 'Unknown')}, Ad Text={ad.get('Ad Text', '...')[:50]}...")
+        if ad.get("Advertiser") == "Unknown Advertiser":
+            print(f"Skipping ad {i+1}: Invalid advertiser")
+            continue
+        
+        ad_key = (ad.get("Advertiser"), ad.get("Ad Text", "...")[:100])
+        if ad_key in seen_ads:
+            print(f"Skipping ad {i+1}: Duplicate ad")
+            continue
+        seen_ads.add(ad_key)
+        
         industry_info = industry_infos[i]
         industry = industry_info["Industry"]
         
@@ -144,15 +127,14 @@ def estimate_metrics(ads):
             conv_rate = DEFAULT_CONVERSION_RATE
             aov = DEFAULT_AOV
             low_confidence_ads.append({
-                "Advertiser": ad["Advertiser"],
-                "Ad Text": ad["Ad Text"],
+                "Advertiser": ad.get("Advertiser"),
+                "Ad Text": ad.get("Ad Text", "..."),
                 "Confidence": industry_info["Confidence"],
                 "Note": industry_info["Note"]
             })
         
-        days_active = ad["Days Active"] if ad["Days Active"] > 0 else DEFAULT_ACTIVE_DAYS
-        impressions = predicted_impressions[i] if predicted_impressions is not None else \
-                     days_active * ad["Ad Variations"] * 223
+        days_active = ad.get("Days Active", DEFAULT_ACTIVE_DAYS)
+        impressions = days_active * ad.get("Ad Variations", 1) * 223  # Rule-based estimation
         clicks = impressions * ctr
         spend = clicks * cpc
         conversions = clicks * conv_rate
@@ -160,7 +142,7 @@ def estimate_metrics(ads):
         roas = revenue / spend if spend > 0 else 0
         
         result = {
-            "Advertiser": ad["Advertiser"],
+            "Advertiser": ad.get("Advertiser"),
             "Industry": industry,
             "CPC": round(cpc, 2),
             "CTR": round(ctr * 100, 2),
@@ -171,6 +153,7 @@ def estimate_metrics(ads):
             "Note": industry_info.get("Note", "")
         }
         results.append(result)
+        print(f"Added result for ad {i+1}: Industry={industry}, Spend=₹{spend:.2f}")
     
     if low_confidence_ads:
         with open("low_confidence_ads.csv", "w", newline="", encoding="utf-8-sig") as f:
@@ -179,6 +162,7 @@ def estimate_metrics(ads):
             writer.writerows(low_confidence_ads)
         print(f"📁 Saved {len(low_confidence_ads)} low-confidence ads to low_confidence_ads.csv")
     
+    print(f"ℹ️ Total valid estimates: {len(results)}")
     return results
 
 def save_metrics_to_csv(data, filename):
@@ -217,21 +201,26 @@ def run_estimation(ads):
     """Main function to run estimation and save results."""
     print(f"ℹ️ Running estimation for {len(ads)} ads")
     metrics = estimate_metrics(ads)
+    print(f"ℹ️ Metrics calculated: {len(metrics)} entries")
     save_metrics_to_csv(metrics, OUTPUT_FILE)
     print("\n📊 Ad Metrics Estimates:")
     for i, metric in enumerate(metrics, 1):
-        print(f"Ad #{i}:")
-        print(f"  Advertiser: {metric['Advertiser']}")
-        print(f"  Industry: {metric['Industry']}")
-        print(f"  CPC: ₹{metric['CPC']:.2f}")
-        print(f"  CTR: {metric['CTR']:.2f}%")
-        print(f"  Conversion Rate: {metric['Conversion Rate']:.2f}%")
-        print(f"  Estimated Spend: ₹{metric['Estimated Spend (INR)']:.2f}")
-        print(f"  Estimated Reach: {metric['Estimated Reach']:.2f}")
-        print(f"  ROAS: {metric['ROAS']:.2f}x")
-        if metric["Note"]:
-            print(f"  Note: {metric['Note']}")
-        print()
+        try:
+            print(f"Ad #{i}:")
+            print(f"  Advertiser: {metric['Advertiser']}")
+            print(f"  Industry: {metric['Industry']}")
+            print(f"  CPC: ₹{metric['CPC']:.2f}")
+            print(f"  CTR: {metric['CTR']:.2f}%")
+            print(f"  Conversion Rate: {metric['Conversion Rate']:.2f}%")
+            print(f"  Estimated Spend: ₹{metric['Estimated Spend (INR)']:.2f}")
+            print(f"  Estimated Reach: {metric['Estimated Reach']:.2f}")
+            print(f"  ROAS: {metric['ROAS']:.2f}x")
+            if metric["Note"]:
+                print(f"  Note: {metric['Note']}")
+            print()
+        except KeyError as e:
+            print(f"⚠️ Error displaying metric for Ad #{i}: Missing key {e}")
+    return metrics
 
 if __name__ == "__main__":
     from scrape import scrape_ads

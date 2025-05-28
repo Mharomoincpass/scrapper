@@ -3,6 +3,8 @@ import csv
 import os
 import requests
 import re
+import shutil
+import glob
 from datetime import datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -10,12 +12,12 @@ from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from estimate_metrics import run_estimation
+from estimate_metrics import run_estimation, DEFAULT_ACTIVE_DAYS
 
 # SETTINGS
-KEYWORD = "Software"
+KEYWORD = "Odint Consulting Services"
 COUNTRY_CODE = "ALL"
-NUM_SCROLLS = 1
+NUM_SCROLLS = 3  # Increased to ensure more ads load
 OUTPUT_FILE = "meta_ads_ranked.csv"
 MEDIA_FOLDER = "ad_media"
 DEBUG_LOG = "scrape_errors.csv"
@@ -43,9 +45,7 @@ def parse_active_time(active_time_text):
         print(f"⚠️ Empty or unknown active time. Defaulting to 1 day.")
         return 1
     try:
-        # Clean text to remove non-date content
         active_time_text = re.sub(r'http[s]?://\S+|www\.\S+', '', active_time_text).strip()
-        # Check for "Started running on" or date range
         if " - " in active_time_text:
             start_date_str, end_date_str = active_time_text.split(" - ")
             start_date = datetime.strptime(start_date_str.strip(), "%d %b %Y")
@@ -80,11 +80,9 @@ def extract_page_id(ad_link):
     """Extract page ID from ad link."""
     if not ad_link:
         return "N/A"
-    # Match numeric page ID
     match = re.search(r'facebook\.com/(\d+)/', ad_link)
     if match:
         return match.group(1)
-    # Match textual page ID
     match = re.search(r'facebook\.com/([^/?]+)', ad_link)
     if match:
         return match.group(1)
@@ -138,10 +136,13 @@ def download_media(url, folder, filename_base, media_type="image"):
         return False
 
 def extract_ad_data(ad, index, advertiser_cache):
-    """Extract data from a single ad element."""
+    """Extract data from a single ad element with retries for dynamic content."""
     try:
-        # Extract advertiser
-        advertiser_elems = ad.find_elements(By.XPATH, './/span[contains(@class, "x1lliihq") or contains(@class, "x193iq5w") or contains(@class, "page")] | .//a[contains(@href, "facebook.com") and not(contains(@href, "fbclid"))]')
+        # Wait for ad content to load
+        WebDriverWait(ad, 5).until(EC.presence_of_element_located((By.XPATH, './/span')))
+        
+        # Extract advertiser with broader selectors
+        advertiser_elems = ad.find_elements(By.XPATH, './/span[contains(@class, "x1lliihq") or contains(@class, "x193iq5w") or contains(@class, "page")] | .//a[contains(@href, "facebook.com") and not(contains(@href, "fbclid"))] | .//div[contains(@class, "advertiser")]')
         advertiser = "Unknown Advertiser"
         for elem in advertiser_elems:
             text = elem.text.strip()
@@ -159,22 +160,22 @@ def extract_ad_data(ad, index, advertiser_cache):
             advertiser = page_id
             advertiser_cache[page_id] = advertiser
         
-        # Fallback to cached advertiser if available
+        # Fallback to cached advertiser
         if advertiser == "Unknown Advertiser" and page_id in advertiser_cache:
             advertiser = advertiser_cache[page_id]
         
-        # Extract ad text
-        ad_text_elems = ad.find_elements(By.XPATH, './/div[contains(@class, "body") or contains(@class, "text") or contains(@class, "content") or contains(@class, "_7jyr") or contains(@class, "description")]')
+        # Extract ad text with broader selectors
+        ad_text_elems = ad.find_elements(By.XPATH, './/div[contains(@class, "body") or contains(@class, "text") or contains(@class, "content") or contains(@class, "_7jyr") or contains(@class, "description") or contains(@class, "ad-text")]')
         ad_text = ad_text_elems[0].text.replace("\n", " ").strip() if ad_text_elems else "..."
         
         # Extract active time
         active_time_elems = ad.find_elements(By.XPATH, './/span[contains(text(), "Started running on") or contains(text(), " - ")]')
         active_time = active_time_elems[0].text if active_time_elems else "Unknown"
         
-        # Extract media
-        image_elems = ad.find_elements(By.XPATH, './/img[@src]')
+        # Extract media with more robust selectors
+        image_elems = ad.find_elements(By.XPATH, './/img[@src] | .//div[contains(@style, "background-image")]')
         image_urls = [img.get_attribute('src') for img in image_elems if img.get_attribute('src') and not img.get_attribute('src').endswith('.gif')]
-        video_elems = ad.find_elements(By.XPATH, './/video[@src]')
+        video_elems = ad.find_elements(By.XPATH, './/video[@src] | .//source[@src]')
         video_urls = [vid.get_attribute('src') for vid in video_elems if vid.get_attribute('src')]
         
         print(f"✔️ Parsed ad #{index}: {advertiser}")
@@ -196,12 +197,22 @@ def extract_ad_data(ad, index, advertiser_cache):
         }
     except Exception as e:
         print(f"⚠️ Error collecting raw ad data for ad #{index}: {e}")
-        return {"Advertiser": "Unknown Advertiser", "Ad Text": "...", "Ad Link": "", "Active Time": "Unknown", "Image URLs": [], "Video URLs": [], "Page ID": "N/A", "Error": str(e)}
+        return {
+            "Advertiser": "Unknown Advertiser",
+            "Ad Text": "...",
+            "Ad Link": "",
+            "Active Time": "Unknown",
+            "Image URLs": [],
+            "Video URLs": [],
+            "Page ID": "N/A",
+            "Error": str(e),
+            "Raw HTML": ad.get_attribute("outerHTML")[:500] if ad else "N/A"
+        }
 
 def scrape_ads(keyword, country="US"):
     """Scrape ads from Meta Ad Library."""
     driver = None
-    advertiser_cache = {}  # Cache page_id to advertiser name
+    advertiser_cache = {}
     error_log = []
     try:
         driver = init_driver()
@@ -224,9 +235,9 @@ def scrape_ads(keyword, country="US"):
             print("ℹ️ No cookie popup detected.")
         last_ad_count = 0
         for i in range(NUM_SCROLLS):
-            driver.execute_script("window.scrollBy(0, 500);")
+            driver.execute_script("window.scrollBy(0, 1000);")
             print(f"📜 Scrolling {i+1}/{NUM_SCROLLS}")
-            time.sleep(1)
+            time.sleep(2)  # Increased delay for dynamic content
             ad_elements = driver.find_elements(By.XPATH, '//div[.//span[contains(text(), "Sponsored")]]')
             current_ad_count = len(ad_elements)
             print(f"🔎 Found {current_ad_count} ad(s) after scroll {i+1}")
@@ -234,7 +245,6 @@ def scrape_ads(keyword, country="US"):
                 print("ℹ️ No new ads loaded. Stopping scroll.")
                 break
             last_ad_count = current_ad_count
-        # Parallelize ad data extraction
         with ThreadPoolExecutor(max_workers=8) as executor:
             raw_ads = list(filter(None, executor.map(lambda x: extract_ad_data(x[0], x[1], advertiser_cache), 
                                                     [(ad, i) for i, ad in enumerate(ad_elements, 1)])))
@@ -244,9 +254,23 @@ def scrape_ads(keyword, country="US"):
         seen_ads = set()
         for index, ad_data in enumerate(raw_ads, start=1):
             try:
-                ad_text = ad_data["Ad Text"].strip().lower()  # Normalize text
+                ad_text = ad_data["Ad Text"].strip().lower()
                 ad_link = ad_data["Ad Link"]
                 page_id = ad_data["Page ID"]
+                # Skip ads with insufficient data
+                if not ad_text or ad_text == "..." or not ad_link or not (ad_data["Image URLs"] or ad_data["Video URLs"]):
+                    print(f"⚠️ Skipping ad #{index}: Incomplete data (Text: {ad_text[:50]}, Link: {ad_link}, Media: {len(ad_data['Image URLs'])} images, {len(ad_data['Video URLs'])} videos)")
+                    error_log.append({
+                        "Ad Index": index,
+                        "Advertiser": ad_data["Advertiser"],
+                        "Ad Text": ad_data["Ad Text"][:100],
+                        "Ad Link": ad_link,
+                        "Page ID": page_id,
+                        "Active Time": ad_data["Active Time"][:100],
+                        "Error": ad_data.get("Error", "Incomplete data"),
+                        "Raw HTML": ad_data.get("Raw HTML", "N/A")
+                    })
+                    continue
                 ad_key = (page_id, ad_text, ad_link)
                 if ad_key in seen_ads:
                     continue
@@ -265,16 +289,6 @@ def scrape_ads(keyword, country="US"):
                     "Video URLs": ad_data["Video URLs"]
                 }
                 ads.append(ad_entry)
-                if ad_data.get("Error") or ad_data["Advertiser"] == "Unknown Advertiser":
-                    error_log.append({
-                        "Ad Index": index,
-                        "Advertiser": ad_data["Advertiser"],
-                        "Ad Text": ad_data["Ad Text"][:100],
-                        "Ad Link": ad_link,
-                        "Page ID": page_id,
-                        "Active Time": ad_data["Active Time"][:100],
-                        "Error": ad_data.get("Error", "Unknown Advertiser")
-                    })
             except Exception as e:
                 print(f"⚠️ Error parsing ad #{index}: {e}")
                 error_log.append({
@@ -284,12 +298,12 @@ def scrape_ads(keyword, country="US"):
                     "Ad Link": ad_link,
                     "Page ID": page_id,
                     "Active Time": ad_data["Active Time"][:100],
-                    "Error": str(e)
+                    "Error": str(e),
+                    "Raw HTML": ad_data.get("Raw HTML", "N/A")
                 })
-        # Save error log
         if error_log:
             with open(DEBUG_LOG, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=["Ad Index", "Advertiser", "Ad Text", "Ad Link", "Page ID", "Active Time", "Error"])
+                writer = csv.DictWriter(f, fieldnames=["Ad Index", "Advertiser", "Ad Text", "Ad Link", "Page ID", "Active Time", "Error", "Raw HTML"])
                 writer.writeheader()
                 writer.writerows(error_log)
             print(f"📁 Saved {len(error_log)} problematic ads to {DEBUG_LOG}")
@@ -336,38 +350,66 @@ def download_all_media(ad, ad_index):
             future.result()
 
 def show_top_5_ads(ads):
-    """Display and save media for top 5 ads based on active time."""
+    """Display and save media for top 5 ads based on hours active, ensuring all have media."""
     if not ads:
         print("⚠️ No ads to rank.")
-        return
-    filtered_ads = [ad for ad in ads if ad["Ad Text"].strip() and ad["Ad Text"] != "..."]
-    if not filtered_ads:
-        print("⚠️ No ads with valid text to rank.")
-        filtered_ads = ads
-    sorted_ads = sorted(filtered_ads, key=lambda x: x["Days Active"], reverse=True)
+        return []
+
+    for ad in ads:
+        days_active = ad["Days Active"] if ad["Days Active"] > 0 else DEFAULT_ACTIVE_DAYS
+        ad["Hours Active"] = days_active * 24
+
+    sorted_ads = sorted(ads, key=lambda x: x["Hours Active"], reverse=True)
     top_ads = []
-    seen_links = set()
+    seen_keys = set()
+
     for ad in sorted_ads:
-        if ad["Ad Link"] not in seen_links:
+        ad_key = (ad["Ad Text"][:100], ad["Ad Link"], ad["Active Time"])
+        # Only include ads with at least one image or video
+        if ad_key not in seen_keys and (ad["Image URLs"] or ad["Video URLs"]):
             top_ads.append(ad)
-            seen_links.add(ad["Ad Link"])
+            seen_keys.add(ad_key)
         if len(top_ads) == 5:
             break
-    print("\n🏆 Top 5 Ads Based on Active Time in Meta Ad Library:")
+
+    if not top_ads:
+        print("⚠️ No valid ads with media to display after filtering.")
+        return []
+
+    print("\n🏆 Top 5 Ads Based on Hours Active in Meta Ad Library:")
     for i, ad in enumerate(top_ads, 1):
         print(f"{i}. Advertiser: {ad['Advertiser']}")
         print(f"   Ad Text: {ad['Ad Text'][:100]}...")
         print(f"   Ad Link: {ad['Ad Link']}")
         print(f"   Page ID: {ad['Page ID']}")
-        print(f"   Active Time: {ad['Active Time']} ({ad['Days Active']:.2f} days active)")
+        print(f"   Active Time: {ad['Active Time']} ({ad['Hours Active']:.2f} hours active)")
         print(f"   Ad Variations: {ad['Ad Variations']}")
         print(f"   Images: {len(ad['Image URLs'])} found")
         print(f"   Videos: {len(ad['Video URLs'])} found")
         download_all_media(ad, i)
+    
+    return top_ads
 
 if __name__ == "__main__":
+    if os.path.exists(MEDIA_FOLDER):
+        try:
+            shutil.rmtree(MEDIA_FOLDER)
+            print(f"🗑️ Cleared {MEDIA_FOLDER} folder.")
+        except Exception as e:
+            print(f"⚠️ Error clearing {MEDIA_FOLDER} folder: {e}")
+    os.makedirs(MEDIA_FOLDER, exist_ok=True)
+    print(f"📁 Created empty {MEDIA_FOLDER} folder.")
+
+    csv_files = glob.glob("*.csv")
+    for csv_file in csv_files:
+        try:
+            os.remove(csv_file)
+            print(f"🗑️ Deleted CSV file: {csv_file}")
+        except Exception as e:
+            print(f"⚠️ Error deleting CSV file {csv_file}: {e}")
+
     ad_data = scrape_ads(KEYWORD, COUNTRY_CODE)
     save_to_csv(ad_data, OUTPUT_FILE)
-    show_top_5_ads(ad_data)
+    top_5_ads = show_top_5_ads(ad_data)
     print("\n📊 Running ad metrics estimation...")
-    run_estimation(ad_data)
+    run_estimation(top_5_ads)
